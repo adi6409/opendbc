@@ -109,7 +109,7 @@ class VolvoCarDocs(CarDocs):
 
 @dataclass(frozen=True)
 class VolvoCarSpecs(CarSpecs):
-  steerRatio: float = 15.0
+  steerRatio: float = 17.0
   centerToFrontRatio: float = 0.44
   minSteerSpeed: float = 1.0
 
