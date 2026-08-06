@@ -81,7 +81,13 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
     int raw_angle = ((GET_BYTES(msg, 3, 1) & 0x3FU) << 8) | GET_BYTES(msg, 4, 1);
     int desired_angle = (raw_angle * 4) - 32768;
     bool lka_active = (GET_BYTES(msg, 5, 1) & 0x03U) != 0U;
-    violation |= steer_angle_cmd_checks(desired_angle, lka_active, VOLVO_STEERING_LIMITS);
+    // EUCD requires LKASteerDirection=NONE for eight frames when changing
+    // direction, while LKAAngleReq continues tracking the target. Keep the
+    // angle-rate state active through that handoff; treating NONE as fully
+    // inactive rejects the retained target and causes a rejection cascade
+    // when the direction becomes active again.
+    bool angle_tracking_active = controls_allowed || lka_active;
+    violation |= steer_angle_cmd_checks(desired_angle, angle_tracking_active, VOLVO_STEERING_LIMITS);
   }
 
   if ((msg->addr == VOLVO_EUCD_FSM0) || (msg->addr == VOLVO_EUCD_FSM1)) {

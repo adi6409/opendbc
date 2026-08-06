@@ -68,6 +68,23 @@ class TestVolvoSafety(common.CarSafetyTest, common.AngleSteeringSafetyTest):
       measured_angle = self.safety.get_angle_meas_min() / self.DEG_TO_CAN
       self.assertTrue(self._tx(self._angle_cmd_msg(measured_angle, False)))
 
+  def test_direction_handoff_keeps_tracking_target_angle(self):
+    self._reset_angle_measurement(0)
+    self.safety.set_controls_allowed(True)
+
+    self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
+    # EUCD direction changes require eight NONE frames that retain the target.
+    # These are angle-control handoff frames, not inactive steering commands.
+    for angle in (0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6):
+      self.assertTrue(self._tx(self._angle_cmd_msg(angle, False)))
+    self.assertTrue(self._tx(self._angle_cmd_msg(1.8, True)))
+
+    # NONE still cannot carry an angle away from measurement when controls
+    # are not allowed.
+    self.safety.set_controls_allowed(False)
+    self._reset_angle_measurement(0)
+    self.assertFalse(self._tx(self._angle_cmd_msg(1.0, False)))
+
   def _pcm_status_msg(self, enable):
     return self.packer.make_can_msg_safety(
       "FSM0", self.VOLVO_CAM_BUS, {"ACC_Enabled": int(enable)},
