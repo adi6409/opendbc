@@ -1,0 +1,144 @@
+import copy
+from opendbc.can import CANParser
+from opendbc.car.common.conversions import Conversions as CV
+from opendbc.car.interfaces import CarStateBase
+from opendbc.car.volvo.values import CarControllerParams, DBC, CANBUS
+from opendbc.car import Bus, structs
+
+
+class CarState(CarStateBase):
+  def __init__(self, CP):
+    super().__init__(CP)
+    self.cruiseState_enabled_prev = False
+    self.eps_torque_timer = 0
+    self.frame = 0
+
+  def update(self, can_parsers) -> structs.CarState:
+    pt_cp = can_parsers[Bus.pt]
+    cam_cp = can_parsers[Bus.cam]
+
+    ret = structs.CarState()
+
+    # car speed
+    ret.vEgoRaw = pt_cp.vl["VehicleSpeed1"]["VehicleSpeed"] * CV.KPH_TO_MS
+    ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
+    # Volvo P3 cluster pads displayed speed by ~7-9% above true CAN speed
+    # (regulatory: speedometer must never under-read). User reported
+    # comma showing 28 when cluster set to 30, 32 when cluster set to 35
+    # (ratios 1.071 and 1.094). vEgoCluster lets the UI show the cluster-
+    # matched value so the user's set point matches what they see.
+    VOLVO_CLUSTER_SCALE = 1.08
+    ret.vEgoCluster = ret.vEgoRaw * VOLVO_CLUSTER_SCALE
+    ret.standstill = ret.vEgoRaw < 0.1
+
+    # gas pedal
+    ret.gasPressed = pt_cp.vl["AccPedal"]["AccPedal"] >= 10
+
+    # brake pedal
+    ret.brakePressed = pt_cp.vl["Brake_Info"]["BrakePedal"] == 2
+
+    # steering
+    ret.steeringAngleDeg = pt_cp.vl["PSCM1"]["SteeringAngleServo"]
+    ret.steeringRateDeg = pt_cp.vl["SAS0"]["SteeringRateOfChange"]
+    self.steeringDirection = pt_cp.vl["SAS0"]["SteeringDirection"]
+    ret.steeringTorque = pt_cp.vl["PSCM1"]["EPSTorque"]
+    if self.steeringDirection:
+      ret.steeringTorque = -abs(ret.steeringTorque)
+    ret.steeringTorqueEps = pt_cp.vl["PSCM1"]["LKATorque"]
+    ret.steeringPressed = False
+
+    # cruise state
+    ret.cruiseState.speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
+    # Same cluster-scale applied to ACC setpoint so what the UI shows
+    # matches what the user dialed on the car cluster.
+    ret.cruiseState.speedCluster = ret.cruiseState.speed * VOLVO_CLUSTER_SCALE
+    ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
+    ret.cruiseState.enabled = bool(cam_cp.vl["FSM0"]["ACC_Enabled"])
+    # ACC_Standstill bit = 1 when Volvo's ACC is holding the car at 0 km/h
+    # with brake applied (standstill hold). OP's SNG block reads this to know
+    # when to blast Resume button so stock ACC properly releases and follows
+    # the lead resuming. Without this, stock ACC sees OP commanding accel
+    # from standstill without a Resume press and hard-cancels (observed in
+    # drive 38).
+    ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"])
+    ret.cruiseState.nonAdaptive = False
+    ret.accFaulted = False
+    self.acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]
+
+    # Check if servo stops responding when ACC is active
+    if ret.cruiseState.enabled and ret.vEgo > self.CP.minSteerSpeed:
+      if not self.cruiseState_enabled_prev:
+        self.eps_torque_timer = 0
+
+      if ret.steeringTorqueEps == 0:
+        self.eps_torque_timer += 1
+      else:
+        self.eps_torque_timer = 0
+
+      ret.steerFaultTemporary = self.eps_torque_timer >= CarControllerParams.STEER_TIMEOUT
+    else:
+      ret.steerFaultTemporary = False
+
+    self.cruiseState_enabled_prev = ret.cruiseState.enabled
+
+    # gear
+    ret.gearShifter = structs.CarState.GearShifter.drive
+
+    # safety
+    ret.stockFcw = False
+    ret.stockAeb = False
+
+    # button presses
+    ret.leftBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 1
+    ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
+
+    # lock info
+    ret.doorOpen = not all([pt_cp.vl["Doors"]["DriverDoorClosed"], pt_cp.vl["Doors"]["PassengerDoorClosed"]])
+    ret.seatbeltUnlatched = False
+
+    # Electronic parking brake. The HandBrake message (0x2EE) reports
+    # Hand_Brake_State as a small enum, decoded from drive 0000004c EPB
+    # capture: state=4 is the NORMAL/RELEASED state (default while
+    # driving), state=2 is mid-transition, state=1 is fully engaged.
+    # Initial guess `bool(state)` was wrong and made parkingBrake=True
+    # almost always — which causes openpilot's disengage logic to refuse
+    # engagement (drive 0000004d/4e: user couldn't engage CC at all).
+    hb_state = pt_cp.vl["HandBrake"]["Hand_Brake_State"]
+    ret.parkingBrake = hb_state in (1, 2)
+
+    # Store info from servo message PSCM1
+    self.pscm_stock_values = pt_cp.vl["PSCM1"]
+
+    # Stock messages preserved for openpilot longitudinal control.
+    self.stock_FSM0 = copy.copy(cam_cp.vl["FSM0"])
+    self.stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
+    self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
+    self.ACC_Check = cam_cp.vl["FSM3"]["ACC_Check"]
+
+    self.frame += 1
+    return ret
+
+  @staticmethod
+  def get_can_parsers(CP):
+    pt_messages = [
+      ("VehicleSpeed1", 50),
+      ("AccPedal", 100),
+      ("Brake_Info", 50),
+      ("PSCM1", 50),
+      ("ACC_Speed", 50),
+      ("MiscCarInfo", 25),
+      ("Doors", 20),
+      ("SAS0", 100),
+      ("HandBrake", 5),
+    ]
+
+    cam_messages = [
+      ("FSM0", 100),
+      ("FSM1", 50),
+      ("FSM3", 50),
+    ]
+
+    return {
+      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, CANBUS.pt),
+      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, CANBUS.cam),
+    }
