@@ -34,7 +34,8 @@
 #define SAFETY_PSA 31U
 #define SAFETY_RIVIAN 33U
 #define SAFETY_VOLKSWAGEN_MEB 34U
-#define SAFETY_VOLVO 35U
+#define SAFETY_VOLVO 36U
+#define SAFETY_MG 38U
 
 #define GET_BIT(msg, b) ((bool)!!(((msg)->data[((b) / 8U)] >> ((b) % 8U)) & 0x1U))
 #define GET_FLAG(value, mask) (((value) & (mask)) == (mask))
@@ -246,7 +247,6 @@ bool steer_curvature_cmd_checks(int desired_curvature, int steer_power, bool ste
 bool longitudinal_accel_checks(int desired_accel, const LongitudinalLimits limits);
 bool longitudinal_speed_checks(int desired_speed, const LongitudinalLimits limits);
 bool longitudinal_gas_checks(int desired_gas, const LongitudinalLimits limits);
-bool longitudinal_transmission_rpm_checks(int desired_transmission_rpm, const LongitudinalLimits limits);
 bool longitudinal_brake_checks(int desired_brake, const LongitudinalLimits limits);
 void pcm_cruise_check(bool cruise_engaged);
 void speed_mismatch_check(const float speed_2);
@@ -364,3 +364,4 @@ extern const safety_hooks volkswagen_pq_hooks;
 extern const safety_hooks rivian_hooks;
 extern const safety_hooks psa_hooks;
 extern const safety_hooks volvo_hooks;
+extern const safety_hooks mg_hooks;

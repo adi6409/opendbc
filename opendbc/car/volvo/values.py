@@ -129,6 +129,7 @@ VOLVO_VERSION_RESPONSE = bytes([uds.SERVICE_TYPE.READ_DATA_BY_IDENTIFIER + 0x40]
   p16(0xf1a2)
 
 FW_QUERY_CONFIG = FwQueryConfig(
+  fw_version_regex=br"[0-9]{8} [A-Z]{2}\x00{13}",
   requests=[
     Request(
       [VOLVO_VERSION_REQUEST],
