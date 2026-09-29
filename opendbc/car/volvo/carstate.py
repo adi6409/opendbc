@@ -186,7 +186,7 @@ class CarState(CarStateBase):
       ("Brake_Info", 50),
       ("PSCM1", 50),
       ("ACC_Speed", 50),
-      ("CCButtons", 0),
+      ("CCButtons", float("nan")),
       ("MiscCarInfo", 25),
       ("Doors", 20),
       ("SAS0", 100),
@@ -202,7 +202,7 @@ class CarState(CarStateBase):
 
     body_messages = [
       ("ESR_Status", 20),
-      ("ESR_Sim1_5C0", 0),
+      ("ESR_Sim1_5C0", float("nan")),
       ("CIPV_Targets_Etc", 20),
       ("ESR_Output_InPath", 20),
       *[(name, 20) for name in DELPHI_ESR_TRACK_NAMES],

@@ -5,6 +5,7 @@ from opendbc.car.volvo import volvocan
 from opendbc.car.volvo.carstate import CarState
 from opendbc.car.volvo.carcontroller import clip_longitudinal_accel
 from opendbc.car.volvo.virtual_target import PreEngageTarget, VirtualBrakeTarget
+from opendbc.car.volvo.values import Bus, CAR
 
 
 def stock_fsm3_values():
@@ -25,6 +26,15 @@ def test_takeoff_accel_is_bounded_to_panda_safety_limits():
   assert clip_longitudinal_accel(2.08) == 2.0
   assert clip_longitudinal_accel(-4.08) == -4.0
   assert clip_longitudinal_accel(0.75) == 0.75
+
+
+def test_optional_can_messages_do_not_invalidate_vehicle_state_when_absent():
+  parsers = CarState.get_can_parsers(SimpleNamespace(carFingerprint=CAR.VOLVO_V60))
+  pt_optional = next(state for state in parsers[Bus.pt].message_states.values() if state.name == "CCButtons")
+  body_optional = next(state for state in parsers[Bus.body].message_states.values() if state.name == "ESR_Sim1_5C0")
+
+  assert pt_optional.ignore_alive
+  assert body_optional.ignore_alive
 
 
 def test_resume_ack_is_stock_shaped_instead_of_zero_filled():
