@@ -318,7 +318,10 @@ class VirtualBrakeTarget:
           cancel=output.cancel,
         )
 
-    return VirtualTargetOutput(cancel=output.cancel)
+    # Keep the lease alive while waiting for an ESR sweep. Dropping it here
+    # made the first NEW frame precede authorization, so Panda rejected every
+    # simulation frame and the no-adoption fail-safe cancelled ACC.
+    return output
 
   def _take_cancel(self) -> bool:
     if self.cancel_count <= 0:
@@ -358,9 +361,12 @@ class PreEngageTarget:
     if not eligible:
       if self.start_nanos:
         self.retirements_remaining = self.RETIREMENT_FRAMES
+        self.exhausted = True
       self.start_nanos = 0
       self.new_sent = False
-      if set_pressed or native_lead or gas_pressed or brake_pressed or stock_acc_enabled:
+      # A pedal or native lead before the episode starts must not consume the
+      # only low-speed attempt. SET and stock ACC do consume it in Panda.
+      if set_pressed or stock_acc_enabled:
         self.exhausted = True
       if speed >= self.MAX_SPEED and not stock_acc_enabled:
         self.exhausted = False

@@ -151,6 +151,9 @@ def create_esr_simulation(packer, status, range_m, range_rate, range_accel,
   This is deliberately upstream of the ESR output/fusion boundary.  It must
   not be replaced with a fabricated TargetN, FSM0, FSM1, or FSM4 frame.
   """
+  if int(status) == ESR_SIM_STATUS_INVALID:
+    return create_esr_simulation_retirement()
+
   def signed_byte(value: float, scale: float) -> int:
     return int(round(float(value) / scale)) & 0xFF
 

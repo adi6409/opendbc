@@ -78,6 +78,7 @@ def test_esr_simulation_encoder_matches_delphi_byte_layout():
 def test_esr_simulation_retirement_is_exact_zero():
   msg = volvocan.create_esr_simulation_retirement()
   assert (msg.address, msg.dat, msg.src) == (0x5C0, b"\x00" * 8, volvocan.CANBUS.body)
+  assert volvocan.create_esr_simulation(CANPacker("ESR"), volvocan.ESR_SIM_STATUS_INVALID, 0, 0, 0) == msg
 
 
 def test_radar_seed_uses_selected_stationary_track_relative_to_ego_speed():
@@ -181,6 +182,22 @@ def test_virtual_target_automatically_arms_on_sustained_braking():
   assert output.frame is not None and output.frame.status == volvocan.ESR_SIM_STATUS_NEW
 
 
+def test_virtual_target_authorizes_before_first_radar_sweep_frame():
+  target = VirtualBrakeTarget()
+  common = dict(
+    automatic_braking=True, controls_active=True, stock_acc_enabled=True,
+    gas_pressed=False, brake_pressed=False, speed=10.0,
+    accel_request=-1.0, scan_start_nanos=0, native_adopted=False,
+    physical_response=False, native_distance=20.0, radar_seed=None,
+  )
+  target.update(1, phase_end_nanos=0, **common)
+  for t in (450_000_001, 550_000_001, 650_000_001):
+    output = target.update(t, phase_end_nanos=0, **common)
+    assert output.authorization and output.frame is None
+  output = target.update(700_000_001, phase_end_nanos=690_000_001, **common)
+  assert output.frame is not None and output.frame.status == volvocan.ESR_SIM_STATUS_NEW
+
+
 def test_pre_engage_target_retires_on_set_and_does_not_reappear():
   target = PreEngageTarget()
   common = dict(
@@ -198,6 +215,27 @@ def test_pre_engage_target_retires_on_set_and_does_not_reappear():
     output = target.update(310_000_001 + i * 10_000_000,
                            phase_end_nanos=300_000_001 + i * 10_000_000, **common)
     assert output.frame is None or output.frame.status == volvocan.ESR_SIM_STATUS_INVALID
+
+
+def test_pre_engage_target_can_start_after_departure_from_braked_standstill():
+  target = PreEngageTarget()
+  common = dict(
+    controls_active=False, stock_acc_available=True, stock_acc_enabled=False,
+    set_pressed=False, gas_pressed=False, brake_pressed=False, speed=5.0,
+    native_lead=False, phase_end_nanos=0, scan_start_nanos=0,
+  )
+  target.update(1, **{**common, "speed": 0.0, "brake_pressed": True})
+  target.update(100_000_001, **{**common, "speed": 0.5, "gas_pressed": True})
+  assert not target.exhausted
+
+  assert target.update(200_000_001, **common).authorization
+  output = target.update(500_000_001, **{**common, "phase_end_nanos": 490_000_001, "scan_start_nanos": 480_000_001})
+  assert output.frame is not None and output.frame.status == volvocan.ESR_SIM_STATUS_NEW
+
+  output = target.update(510_000_001, **{**common, "brake_pressed": True})
+  assert output.frame is not None and output.frame.status == volvocan.ESR_SIM_STATUS_INVALID
+  assert target.exhausted
+  assert not target.update(550_000_001, **common).authorization
 
 
 def test_pre_engage_target_retires_on_missing_phase():

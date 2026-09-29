@@ -3,6 +3,7 @@ import unittest
 
 from opendbc.car.structs import CarParams
 from opendbc.car.volvo.volvocan import calculate_lka_checksum, create_esr_simulation
+from opendbc.car.volvo.virtual_target import VirtualBrakeTarget
 from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
 from opendbc.safety.tests.common import CANPackerSafety
@@ -164,12 +165,41 @@ class TestVolvoSafety(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self.assertFalse(self._tx(self._esr_sim_msg()))
     self.assertTrue(self._tx(common.make_msg(1, 0x5C0, dat=b"\x00" * 8)))
 
+  def test_host_brake_target_lease_precedes_first_panda_accepted_frame(self):
+    target = VirtualBrakeTarget()
+    self.safety.set_controls_allowed(True)
+    for timestamp in range(10_000, 710_000, 10_000):
+      self.safety.set_timer(timestamp)
+      if timestamp % 50_000 == 0:
+        self._rx(self._speed_msg(10.0))
+        self.assertTrue(self._tx(self._fsm3_accel_msg(-1.0)))
+      output = target.update(
+        timestamp * 1000, automatic_braking=True, controls_active=True,
+        stock_acc_enabled=True, gas_pressed=False, brake_pressed=False,
+        speed=10.0, accel_request=-1.0,
+        phase_end_nanos=699_000_000 if timestamp == 700_000 else 0,
+        scan_start_nanos=680_000_000 if timestamp == 700_000 else 0,
+        native_adopted=False, physical_response=False, native_distance=20.0,
+      )
+      if output.authorization:
+        self.assertFalse(self._tx(self._esr_auth_msg()))
+      if output.frame is not None:
+        self.assertEqual(output.frame.status, 1)
+        self.assertTrue(self._tx(self._esr_sim_msg(
+          status=output.frame.status, range_m=output.frame.range_m,
+          range_rate=output.frame.range_rate, range_accel=output.frame.range_accel,
+        )))
+        return
+    self.fail("brake target never produced its first radar-sweep frame")
+
   def test_esr_simulation_rejects_bad_geometry(self):
     self.safety.set_controls_allowed(True)
     for _ in range(6):
       self._rx(self._speed_msg(10.0))
     self.assertFalse(self._tx(self._esr_sim_msg(range_m=5)))
-    self.assertFalse(self._tx(self._esr_sim_msg(status=0)))
+    # INVALID is encoded as the exact-zero retirement accepted in all states.
+    self.assertTrue(self._tx(self._esr_sim_msg(status=0)))
+    self.assertFalse(self._tx(common.make_msg(1, 0x5C0, dat=b"\x20" + b"\x00" * 7)))
 
   def test_stock_fsm_forwarding_is_replaced_only_during_control(self):
     for addr in (0x51, 0x260, 0x270):
