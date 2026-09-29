@@ -1,3 +1,19 @@
+from opendbc.car.can_definitions import CanData
+from opendbc.car.volvo.values import CANBUS
+
+
+ESR_SIM_TARGET_ID = 1
+ESR_SIM_FUNCTION_ACC = 0
+ESR_SIM_STATUS_INVALID = 0
+ESR_SIM_STATUS_NEW = 1
+ESR_SIM_STATUS_UPDATED = 2
+ESR_SIM_STATUS_COASTED = 3
+ESR_SIM_ADDR = 0x5C0
+ESR_SIM_AUTH_ADDR = 0x5C1
+ESR_SIM_AUTH_PAYLOAD = b"VLS1\x00\x00\x00\x00"
+ESR_PRE_SET_AUTH_PAYLOAD = b"VLP1\x00\x00\x00\x00"
+
+
 def create_button_msg(packer, resume=False, cancel=False, bus=0):
   # TODO: validate
   msg = {
@@ -12,7 +28,7 @@ def create_button_msg(packer, resume=False, cancel=False, bus=0):
 def create_acc_state_msg(packer, stock_fsm3, accel):
   # The original Volvo SNG helper emitted a zero-filled FSM3 with only
   # ACC_Check set. With longitudinal safety enabled that encodes -5.04 m/s²,
-  # so Panda rejects every acknowledgement. Preserve the complete current
+  # so Panda rejects every acknowledgment. Preserve the complete current
   # stock FSM3 shape and change only the bounded accel plus ACC_Check.
   return create_longitudinal(packer, stock_fsm3, accel, 1)
 
@@ -126,3 +142,41 @@ def create_radar(packer, stock_fsm1):
     "Byte_7",
   )}
   return packer.make_can_msg("FSM1", 0, values)
+
+
+def create_esr_simulation(packer, status, range_m, range_rate, range_accel,
+                          angle_deg=0.0, lateral_position=0.0, lateral_rate=0.0):
+  """Encode Delphi ESR simulation input 0x5C0 on the physical radar bus.
+
+  This is deliberately upstream of the ESR output/fusion boundary.  It must
+  not be replaced with a fabricated TargetN, FSM0, FSM1, or FSM4 frame.
+  """
+  def signed_byte(value: float, scale: float) -> int:
+    return int(round(float(value) / scale)) & 0xFF
+
+  dat = bytes([
+    (ESR_SIM_TARGET_ID << 5) | (int(status) << 3) | ESR_SIM_FUNCTION_ACC,
+    signed_byte(angle_deg, 0.5),
+    signed_byte(lateral_position, 0.25),
+    signed_byte(lateral_rate, 0.25),
+    max(0, min(255, int(round(float(range_m))))),
+    signed_byte(range_accel, 0.25),
+    signed_byte(range_rate, 0.25),
+    0,
+  ])
+  return CanData(ESR_SIM_ADDR, dat, CANBUS.body)
+
+
+def create_esr_simulation_retirement():
+  """Return the exact-zero lifecycle reset accepted in every safety state."""
+  return CanData(ESR_SIM_ADDR, b"\x00" * 8, CANBUS.body)
+
+
+def create_esr_simulation_authorization():
+  """Private host-to-Panda lifecycle lease; safety consumes it on bus 0."""
+  return CanData(ESR_SIM_AUTH_ADDR, ESR_SIM_AUTH_PAYLOAD, CANBUS.pt)
+
+
+def create_esr_pre_set_authorization():
+  """Lease for the limited pre-SET same-speed lead mode."""
+  return CanData(ESR_SIM_AUTH_ADDR, ESR_PRE_SET_AUTH_PAYLOAD, CANBUS.pt)

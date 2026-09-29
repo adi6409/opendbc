@@ -2,14 +2,14 @@
 import unittest
 
 from opendbc.car.structs import CarParams
-from opendbc.car.volvo.volvocan import calculate_lka_checksum
+from opendbc.car.volvo.volvocan import calculate_lka_checksum, create_esr_simulation
 from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
 from opendbc.safety.tests.common import CANPackerSafety
 
 
 class TestVolvoSafety(common.CarSafetyTest, common.AngleSteeringSafetyTest):
-  TX_MSGS = [[0x51, 0], [0x127, 0], [0x246, 2], [0x260, 0], [0x262, 0], [0x270, 0]]
+  TX_MSGS = [[0x51, 0], [0x127, 0], [0x246, 2], [0x260, 0], [0x262, 0], [0x270, 0], [0x5C0, 1], [0x5C1, 0]]
   GAS_PRESSED_THRESHOLD = 10
   STANDSTILL_THRESHOLD = 0.1
   RELAY_MALFUNCTION_ADDRS = {0: [0x262], 2: [0x246]}
@@ -85,9 +85,9 @@ class TestVolvoSafety(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self._reset_angle_measurement(0)
     self.assertFalse(self._tx(self._angle_cmd_msg(1.0, False)))
 
-  def _pcm_status_msg(self, enable):
+  def _pcm_status_msg(self, enable, available=False):
     return self.packer.make_can_msg_safety(
-      "FSM0", self.VOLVO_CAM_BUS, {"ACC_Enabled": int(enable)},
+      "FSM0", self.VOLVO_CAM_BUS, {"ACC_Enabled": int(enable), "ACC_Available": int(available)},
     )
 
   def _speed_msg(self, speed: float):
@@ -114,12 +114,62 @@ class TestVolvoSafety(common.CarSafetyTest, common.AngleSteeringSafetyTest):
       {"ACC_AccelerationRequest": accel, "ACC_Check": acc_check},
     )
 
+  def _esr_sim_msg(self, status=1, range_m=20, range_rate=-2.0, range_accel=-1.0):
+    msg = create_esr_simulation(None, status, range_m, range_rate, range_accel)
+    return libsafety_py.make_CANPacket(msg.address, msg.src, msg.dat)
+
+  def _esr_auth_msg(self):
+    return common.make_msg(0, 0x5C1, dat=b"VLS1\x00\x00\x00\x00")
+
+  def _esr_pre_set_auth_msg(self):
+    return common.make_msg(0, 0x5C1, dat=b"VLP1\x00\x00\x00\x00")
+
+  def test_pre_set_simulation_requires_stock_available_and_strict_geometry(self):
+    self.safety.set_controls_allowed(False)
+    self._rx(self._pcm_status_msg(False, available=True))
+    for _ in range(6):
+      self._rx(self._speed_msg(5.0))
+    self.assertFalse(self._tx(self._esr_sim_msg(status=1, range_m=40, range_rate=0, range_accel=0)))
+    for timestamp in range(10_000, 270_000, 10_000):
+      self.safety.set_timer(timestamp)
+      if timestamp % 50_000 == 0:
+        self._rx(self._pcm_status_msg(False, available=True))
+        self._rx(self._speed_msg(5.0))
+      self.assertFalse(self._tx(self._esr_pre_set_auth_msg()))
+    self.assertFalse(self._tx(self._esr_sim_msg(status=1, range_m=20, range_rate=0, range_accel=0)))
+    self.assertTrue(self._tx(self._esr_sim_msg(status=1, range_m=40, range_rate=0, range_accel=0)))
+    self.assertFalse(self._tx(self._esr_sim_msg(status=2, range_m=40, range_rate=-1, range_accel=0)))
+    self._rx(self.packer.make_can_msg_safety("CCButtons", 0, {"ACCSetBtn": 1}))
+    self.assertFalse(self._tx(self._esr_sim_msg(status=2, range_m=40, range_rate=0, range_accel=0)))
+    self._rx(self.packer.make_can_msg_safety("CCButtons", 0, {"ACCSetBtn": 0}))
+    self.assertFalse(self._tx(self._esr_sim_msg(status=2, range_m=40, range_rate=0, range_accel=0)))
+    self.assertTrue(self._tx(common.make_msg(1, 0x5C0, dat=b"\x00" * 8)))
+
   def test_fsm3_longitudinal_limits(self):
     self.safety.set_controls_allowed(True)
     self.assertTrue(self._tx(self._fsm3_accel_msg(2.0, acc_check=1)))
     self.assertFalse(self._tx(self._fsm3_accel_msg(2.04, acc_check=1)))
     self.assertTrue(self._tx(self._fsm3_accel_msg(-4.0)))
     self.assertFalse(self._tx(self._fsm3_accel_msg(-4.04)))
+
+  def test_esr_simulation_requires_sustained_authorization_and_braking(self):
+    self.safety.set_controls_allowed(True)
+    for _ in range(6):
+      self._rx(self._speed_msg(10.0))
+    for timestamp in range(10_000, 220_000, 10_000):
+      self.safety.set_timer(timestamp)
+      self.assertFalse(self._tx(self._esr_auth_msg()))
+      self.assertTrue(self._tx(self._fsm3_accel_msg(-1.0)))
+    self.assertTrue(self._tx(self._esr_sim_msg()))
+    self.assertFalse(self._tx(self._esr_sim_msg()))
+    self.assertTrue(self._tx(common.make_msg(1, 0x5C0, dat=b"\x00" * 8)))
+
+  def test_esr_simulation_rejects_bad_geometry(self):
+    self.safety.set_controls_allowed(True)
+    for _ in range(6):
+      self._rx(self._speed_msg(10.0))
+    self.assertFalse(self._tx(self._esr_sim_msg(range_m=5)))
+    self.assertFalse(self._tx(self._esr_sim_msg(status=0)))
 
   def test_stock_fsm_forwarding_is_replaced_only_during_control(self):
     for addr in (0x51, 0x260, 0x270):
