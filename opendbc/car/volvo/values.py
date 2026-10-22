@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 
 from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds, DT_CTRL
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.lateral import AngleSteeringLimits
 from opendbc.car.docs_definitions import CarHarness, CarDocs, CarParts
 from opendbc.car.fw_query_definitions import FwQueryConfig, Request, p16
@@ -9,73 +10,78 @@ from opendbc.car.structs import CarParams
 
 Ecu = CarParams.Ecu
 
-"""
-Volvo Electronic Control Units abbreviations and network topology
-Platforms C1MCA/EUCD
-
-Three main CAN network buses
-  1. Powertrain
-  2. Chassis (also called MS* CAN) *MS=Medium Speed
-  3. Extended
-Only mentioning control units of interest on the network buses.
-
-Powertrain CAN
-  BCM - Brake Control Module
-  CEM - Central Electronic Module
-  CVM - Closing Velocity Module (low speed auto emergency braking <30kph)
-  FSM - Forward Sensing Module (camera mounted in windscreen)
-  PPM - Pedestrian Protection Module (controls pedestrian airbag under the engine hood)
-  PSCM - Power Steering Control Module (EPS - Electronic Power Steering)
-  SAS - Steering Angle Sensor Module
-  SRS - Supplemental Restraint System Module (seatbelts, airbags...)
-  TCM - Transmission Control Module
-
-Chassis CAN
-  CEM - Central Electronic Module
-  DIM - Driver Information Module (the instrument cluster with odo and speedometer, relayed thru CEM)
-  PAM - Parking Assistance Module (automatic parking, relayed thru CEM)
-
-Extended CAN
-  CEM - Central Electronic Module
-  SODL - Side Object Detection Left (relayed thru CEM)
-  SODR - Side Object Detection Right (relayed thru CEM)
-"""
+# Volvo EUCD/C1MCA CAN buses: pt (BCM/FSM/PSCM/SAS), chassis (DIM/PAM via CEM), ext (SODL/SODR via CEM)
 
 
 class SteerDirection(IntEnum):
-  """Constants for LKASteerDirection.
-
-  On the EUCD platform, we need to wait 8 frames when switching from LEFT to RIGHT
-  and vice versa. On the C1MCA platform, we can instead use BOTH."""
+  """LKASteerDirection: EUCD needs 8-frame wait on direction change; C1MCA can use BOTH."""
   NONE = 0
   RIGHT = 1
   LEFT = 2
   BOTH = 3
 
 
+class LongMode(IntEnum):
+  """FSM3 Byte_2 bits 1:0. The ECM uses the hydraulic brake only in BRAKE."""
+  BRAKE = 0
+  COAST = 1
+  DRIVE = 2
+
+
+class EcmAccState(IntEnum):
+  """EngineData Byte_4 bits 5:4, the ECM's ACC state."""
+  OFF = 1
+  STANDBY = 2
+  ENGAGED = 3
+
+
 class CarControllerParams:
-  # EUCD: Torque limit for steering is 50 CAN units
-  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(90,  # deg, reasonable limit
+  # Lateral
+  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(90,
     ([0., 5., 15.], [5., .8, .15]),
     ([0., 5., 15.], [5., 3.5, 0.4]),
   )
+  STEER_TIMEOUT = 30 / DT_CTRL  # frames of 0 torque before the EPS faults
+  BLOCK_LEN = 8   # frames to block steering on a direction change
+  DEADZONE = 0.2  # deg, keep the previous direction inside it
+  BUTTON_BURST = 15  # frames per button press
+  SNG_OP_RESUME_TIME = 0.5  # s of openpilot's resume request before it triggers the SNG resume
 
-  # Temporary steer fault timeout
-  # Maximum time to continuously read 0 torque from EPS
-  STEER_TIMEOUT = 30 / DT_CTRL
-
-  # EUCD
-  # When changing steer direction steering request need to be blocked.
-  # Otherwise servo won't "listen" to the request.
-  # This calibration sets the number of samples to block steering request.
-  BLOCK_LEN = 8
-  # When close to desired steering angle, don't change steer direction inside deadzone.
-  # Since we need to release control of the steering wheel for a brief moment, steering wheel will
-  # unwind by itself.
-  DEADZONE = 0.2
-
+  # Longitudinal limits
   ACCEL_MIN = -4.0  # m/s^2
   ACCEL_MAX = 2.0   # m/s^2
+
+  # FSM3 mode hysteresis on OP accel (fit to the stock camera)
+  BRAKE_ENTER = -0.50  # m/s^2
+  BRAKE_EXIT = -0.15
+  DRIVE_ENTER = 0.08
+  DRIVE_EXIT = 0.04
+
+  # FSM4 14-bit brake target vs accel (stock camera means), with and without the brake flag
+  FSM4_BRAKE_ACCEL_BP = [-3.5, -2.5, -1.75, -1.25, -0.8, -0.45, -0.2, 0.0, 0.2]
+  FSM4_BRAKE_VALUE_V = [12519, 12850, 12964, 13073, 13143, 13227, 13279, 13328, 13378]
+  FSM4_NO_BRAKE_ACCEL_BP = [-0.45, -0.2, 0.0, 0.2, 0.45, 0.8, 1.5]
+  FSM4_NO_BRAKE_VALUE_V = [13276, 13299, 13318, 13338, 13333, 13377, 13449]
+
+  # Brake acks to the camera (0x220 Byte_2 bit2, 0x299 Byte_5 bit3): masked while OP brakes alone, and this long after
+  CAM_BRAKE_MASK_MSGS = frozenset({0x220, 0x299})
+  CAM_BRAKE_MASK_HOLD_FRAMES = int(1.0 / DT_CTRL)
+
+  # Camera brake requests: OP ignores mild ones (spoofed ack), honors them below CAMERA_BRAKE_HONOR_BELOW
+  OP_IGNORES_MILD_CAMERA_BRAKE = True
+  CAMERA_BRAKE_HONOR_BELOW = -2.0  # m/s^2
+  CAM_ACK_RELEASE_VALUE = 13280  # spoofed 0x299 ack drops when the camera's FSM4 target reaches this (no braking)
+
+  # Camera final stop behind a lead
+  CAMERA_STOPS_BEHIND_LEAD = True
+  CAM_STOP_HANDOVER_SPEED = 10. * CV.KPH_TO_MS  # camera takes over below this, with a target
+  CAM_STOP_RETURN_SPEED = 15. * CV.KPH_TO_MS    # OP takes back above this
+  CAM_STOP_TRANSITION_TIME = 1.0  # s, blend between OP and camera
+  OP_BRAKE_OVERRIDE_ACCEL = -0.3  # m/s^2, OP brakes if it wants less than this and the camera does not brake
+  OP_BRAKE_OVERRIDE_MARGIN = 1.0  # m/s^2, OP brakes if it wants this much more than the camera
+
+  # Keep the ECM engaged on the camera's last good frames after a camera abort (latched a fault in testing)
+  OP_OWNS_ACC_AFTER_CAMERA_ABORT = False
 
   def __init__(self, CP):
     pass
@@ -86,11 +92,7 @@ class CANBUS:
   cam = 2
 
 
-# The Delphi ESR 2.5 "forward-looking radar" sits on the aux bus and streams
-# 64 tracks at 20Hz at 0x500..0x53F. Openpilot reads it directly so the planner
-# sees lead info independently of stock FSM fusion (which only reports a single
-# 1m-resolution ACC_Distance). Prior to this the planner had radarUnavailable=True
-# and lost leads in curves / under-commanded accel at take-off (drive 0000003e).
+# Delphi ESR 2.5 on aux bus (0x500–0x53F, 20Hz, 64 tracks); read directly so planner sees leads independently of stock FSM
 RADAR_ESR = "ESR"
 
 @dataclass
@@ -115,10 +117,8 @@ class VolvoCarSpecs(CarSpecs):
 
 
 class CAR(Platforms):
-  #config: VolvoEUCDPlatformConfig
-
   VOLVO_V60 = VolvoEUCDPlatformConfig(
-    [VolvoCarDocs("Volvo V60 2015")],
+    [VolvoCarDocs("Volvo V60 2010-18")],
     VolvoCarSpecs(mass=1750, wheelbase=2.776),
   )
 

@@ -47,15 +47,14 @@ BO_ 32 AccPedal: 8 XXX
  SG_ AccPedal : 17|10@0+ (0.1,0) [0|102.3] "%" XXX
 
 BO_ 81 FSM0: 8 FSM
- SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ ACC_FrontCar : 16|1@0+ (1,0) [0|1] "" XXX
  SG_ ACC_Available : 17|1@0+ (1,0) [0|7] "" XXX
  SG_ ACC_Enabled : 18|1@0+ (1,0) [0|1] "" XXX
- SG_ Byte_2_lo : 23|5@0+ (1,0) [0|31] "" XXX
- SG_ Byte_3_hi : 31|4@0+ (1,0) [0|15] "" XXX
  SG_ ACC_BrakeAlert : 27|1@0+ (1,0) [0|1] "" XXX
- SG_ Byte_3_lo : 26|3@0+ (1,0) [0|7] "" XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
@@ -85,13 +84,19 @@ BO_ 298 EngineData: 8 XXX
  SG_ NEW_SIGNAL_2 : 33|10@0- (1,0) [0|7] "" XXX
  SG_ NEW_SIGNAL_3 : 34|1@0+ (1,0) [0|1] "" XXX
  SG_ NEW_SIGNAL_4 : 35|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_SIGNAL_5 : 36|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_SIGNAL_6 : 37|1@0+ (1,0) [0|1] "" XXX
+ SG_ ACC_State_ECM : 37|2@0+ (1,0) [0|3] "" XXX
  SG_ BrakePressed : 38|1@0+ (1,0) [0|1] "" XXX
  SG_ EngineRpm : 52|13@0+ (1,0) [0|8000] "" XXX
 
 BO_ 307 NEW_MSG_133: 8 XXX
- SG_ Brake : 14|7@0+ (1,0) [0|127] "" XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 328 VehicleSpeed1: 8 XXX
  SG_ BrakePressure2 : 33|10@0+ (1,0) [0|63] "" XXX
@@ -130,6 +135,14 @@ BO_ 522 Brake_Info: 8 XXX
 BO_ 544 wheelspeed1: 8 BCM
  SG_ WhlSpdRR : 39|16@0+ (0.01,-327.68) [0|65535] "" XXX
  SG_ WhlSpdLR : 55|16@0+ (0.01,-327.68) [0|65535] "" XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 565 wheelspeed0: 8 BCM
  SG_ WhlSpdRF : 39|16@0+ (0.01,-327.68) [0|65535] "" XXX
@@ -198,13 +211,33 @@ BO_ 794 FSM4: 8 FSM
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ ACC_LeadSpeed : 31|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_4_Hi : 39|4@0+ (1,0) [0|15] "" XXX
- SG_ NEW_SIGNAL_2 : 32|4@1+ (1,0) [0|15] "" XXX
- SG_ NEW_SIGNAL_1 : 47|16@0+ (1,-46090) [0|16383] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 665 NEW_MSG_299: 8 XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 802 StartStop: 8 XXX
  SG_ StartStop : 8|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 803 NEW_MSG_323: 8 XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 923 Accessories_01: 8 XXX
  SG_ NEW_SIGNAL_1 : 15|16@0+ (1,0) [0|65535] "" XXX

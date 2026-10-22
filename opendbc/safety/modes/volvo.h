@@ -2,56 +2,52 @@
 
 #include "opendbc/safety/declarations.h"
 
-#define VOLVO_EUCD_ACC_PEDAL      0x020U
-#define VOLVO_EUCD_FSM0           0x051U
-#define VOLVO_EUCD_CC_BUTTONS     0x127U
-#define VOLVO_EUCD_VEHICLE_SPEED  0x148U
-#define VOLVO_EUCD_BRAKE_INFO     0x20AU
-#define VOLVO_EUCD_PSCM1          0x246U
-#define VOLVO_EUCD_FSM1           0x260U
-#define VOLVO_EUCD_FSM2           0x262U
-#define VOLVO_EUCD_FSM3           0x270U
+// Safety-relevant CAN messages for EUCD platform.
+#define VOLVO_EUCD_AccPedal      0x020  // RX, gas pedal
+#define VOLVO_EUCD_FSM0          0x051  // TX by OP, camera's relayed; ACC state
+#define VOLVO_EUCD_EngineData    0x12A  // RX, ECM ACC state
+#define VOLVO_EUCD_VehicleSpeed1 0x148  // RX, vehicle speed
+#define VOLVO_EUCD_Brake_Info    0x20a  // RX, driver brake pressed
+#define VOLVO_EUCD_CCButtons     0x127  // TX by OP, CC buttons
+#define VOLVO_EUCD_PSCM1         0x246  // TX by OP to camera, PSCM state
+#define VOLVO_EUCD_BRAKE_LEVEL   0x133  // TX by OP to camera, brake level
+#define VOLVO_EUCD_BRAKE_ACK     0x323  // TX by OP to camera, brake applied
+#define VOLVO_EUCD_WHEELSPEED1   0x220  // TX by OP to camera, rear wheel speeds + brake request active
+#define VOLVO_EUCD_BRAKE_REQ_ACK 0x299  // TX by OP to camera, brake request ack
+#define VOLVO_EUCD_FSM1          0x260  // TX by OP, ACC radar/distance message (oplong)
+#define VOLVO_EUCD_FSM2          0x262  // TX by OP, LKA command
+#define VOLVO_EUCD_FSM3          0x270  // TX by OP, ACC accel request + status
+#define VOLVO_EUCD_FSM4          0x31A  // TX by OP, camera's relayed; brake request
 
+// CAN bus numbers.
 #define VOLVO_MAIN_BUS 0U
+#define VOLVO_AUX_BUS  1U
 #define VOLVO_CAM_BUS  2U
 
-static const AngleSteeringLimits VOLVO_STEERING_LIMITS = {
-  .max_angle = 9000,
-  .angle_deg_to_can = 100,
-  .angle_rate_up_lookup = {
-    {0., 5., 15.},
-    {5., .8, .15},
-  },
-  .angle_rate_down_lookup = {
-    {0., 5., 15.},
-    {5., 3.5, .4},
-  },
-  .frequency = 50U,
-};
-
-static const LongitudinalLimits VOLVO_LONG_LIMITS = {
-  .max_accel = 50,    // +2.00 m/s^2, raw value relative to the DBC offset
-  .min_accel = -100,  // -4.00 m/s^2
-  .inactive_accel = 0,
-};
-
 static void volvo_rx_hook(const CANPacket_t *msg) {
-  if ((msg->bus == VOLVO_MAIN_BUS) && (msg->addr == VOLVO_EUCD_VEHICLE_SPEED)) {
-    unsigned int speed_raw = (GET_BYTES(msg, 6, 1) << 8) | GET_BYTES(msg, 7, 1);
-    vehicle_moving = speed_raw >= 36U;
-    UPDATE_VEHICLE_SPEED(speed_raw * 0.01 * KPH_TO_MS);
-  }
+  int addr = msg->addr;
+  if (msg->bus == VOLVO_MAIN_BUS) {
+    if (addr == VOLVO_EUCD_VehicleSpeed1) {
+      // Signal: VehicleSpeed
+      unsigned int speed_raw = (GET_BYTES(msg, 6, 1) << 8) | GET_BYTES(msg, 7, 1);
+      vehicle_moving = speed_raw >= 36U;
+      UPDATE_VEHICLE_SPEED(speed_raw * 0.01 / 3.6);
+    }
 
-  if ((msg->bus == VOLVO_MAIN_BUS) && (msg->addr == VOLVO_EUCD_ACC_PEDAL)) {
-    unsigned int gas_raw = ((GET_BYTES(msg, 2, 1) & 0x03U) << 8) | GET_BYTES(msg, 3, 1);
-    gas_pressed = gas_raw >= 100U;
-  }
+    if (addr == VOLVO_EUCD_AccPedal) {
+      // Signal: AccPedal
+      unsigned int gas_raw = ((GET_BYTES(msg, 2, 1) & 0x03U) << 8) | GET_BYTES(msg, 3, 1);
+      gas_pressed = gas_raw >= 100U;
+    }
 
-  if ((msg->bus == VOLVO_MAIN_BUS) && (msg->addr == VOLVO_EUCD_BRAKE_INFO)) {
-    brake_pressed = ((GET_BYTES(msg, 2, 1) & 0x0CU) >> 2U) == 2U;
-  }
+    if (addr == VOLVO_EUCD_Brake_Info) {
+      // Signal: BrakePedal
+      brake_pressed = ((GET_BYTES(msg, 2, 1) & 0x0CU) >> 2U) == 2U;
+    }
 
-  if ((msg->bus == VOLVO_MAIN_BUS) && (msg->addr == VOLVO_EUCD_PSCM1)) {
+    if (addr == VOLVO_EUCD_PSCM1) {
+      // Signal: SteeringAngleServo (16-bit big-endian, bytes 2-3, factor 0.0447, offset -1465 deg).
+      // Stored as angle_deg * 100 to match VOLVO_STEERING_LIMITS.angle_deg_to_can in the tx hook.
     int raw_angle = (GET_BYTES(msg, 2, 1) << 8) | GET_BYTES(msg, 3, 1);
     int angle_meas_new = ((raw_angle * 447) / 100) - 146500;
     // FSM2's requested angle has 0.04 degree resolution. Normalize the
@@ -59,77 +55,146 @@ static void volvo_rx_hook(const CANPacket_t *msg) {
     int angle_sign = angle_meas_new < 0 ? -1 : 1;
     angle_meas_new = angle_sign * ((((angle_meas_new * angle_sign) + 1) / 4) * 4);
     update_sample(&angle_meas, angle_meas_new);
-  }
+    }
 
-  if ((msg->bus == VOLVO_CAM_BUS) && (msg->addr == VOLVO_EUCD_FSM0)) {
-    bool cruise_engaged = (GET_BYTES(msg, 2, 1) & 0x04U) != 0U;
-    pcm_cruise_check(cruise_engaged);
+    if (addr == VOLVO_EUCD_EngineData) {
+      // Signal: ACC_State_ECM (byte 4 bits 5:4: 1 off, 2 standby, 3 engaged)
+      bool cruise_engaged = ((GET_BYTES(msg, 4, 1) >> 4) & 0x3U) == 0x3U;
+      pcm_cruise_check(cruise_engaged);
+    }
+  } else {
+    // no other bus is monitored
   }
 }
 
 static bool volvo_tx_hook(const CANPacket_t *msg) {
+  // FSM3 byte1 = ACC_AccelerationRequest (factor 0.04, offset -5.04); raw_accel = byte1 - 126.
+  // +50 raw = +2.0 m/s^2 max accel; -100 raw = -4.0 m/s^2 max decel.
+  const LongitudinalLimits VOLVO_LONG_LIMITS = {
+    .max_accel = 50,
+    .min_accel = -100,
+    .inactive_accel = 0,
+  };
+
+  // Angle steering limits — mirror CarControllerParams.ANGLE_LIMITS in values.py.
+  // angle_deg_to_can = 100 so desired_angle / angle_meas are carried as angle_deg * 100.
+  const AngleSteeringLimits VOLVO_STEERING_LIMITS = {
+    .max_angle = 9000,  // 90 deg
+    .angle_deg_to_can = 100,
+    .angle_rate_up_lookup = {
+      {0., 5., 15.},
+      {5., .8, .15}
+    },
+    .angle_rate_down_lookup = {
+      {0., 5., 15.},
+      {5., 3.5, .4}
+    },
+    // Retain this branch's measured-angle tracking and direction-handoff checks.
+    .frequency = 50U,
+  };
+
+  bool tx = true;
   bool violation = false;
+  int addr = msg->addr;
 
-  if (msg->addr == VOLVO_EUCD_CC_BUTTONS) {
-    bool cancel = GET_BIT(msg, 59U) || !GET_BIT(msg, 43U);
-    bool resume = GET_BIT(msg, 61U) || !GET_BIT(msg, 45U);
-    violation |= cancel && !cruise_engaged_prev;
-    violation |= resume && !controls_allowed;
+  // Safety check for CC button signals.
+  if (addr == VOLVO_EUCD_CCButtons) {
+    // Violation if resume button is pressed while controls not allowed, or
+    // if cancel button is pressed when cruise isn't engaged.
+    violation |= !cruise_engaged_prev && (GET_BIT(msg, 59U) || !(GET_BIT(msg, 43U)));  // Signals: ACCOnOffBtn, ACCOnOffBtnInv (cancel)
+    violation |= !controls_allowed && (GET_BIT(msg, 61U) || !(GET_BIT(msg, 45U)));  // Signals: ACCResumeBtn, ACCResumeBtnInv (resume)
   }
 
-  if (msg->addr == VOLVO_EUCD_FSM2) {
-    int raw_angle = ((GET_BYTES(msg, 3, 1) & 0x3FU) << 8) | GET_BYTES(msg, 4, 1);
-    int desired_angle = (raw_angle * 4) - 32768;
+  // FSM0 from OP may report ACC enabled only while the ECM is engaged, so OP can never engage ACC by itself.
+  if (addr == VOLVO_EUCD_FSM0) {
+    bool acc_enabled = (GET_BYTES(msg, 2, 1) & 0x04U) != 0U;
+    violation |= acc_enabled && !cruise_engaged_prev;
+  }
+
+  // Safety check for Lane Keep Assist action.
+  if (addr == VOLVO_EUCD_FSM2) {
+    // Signal: LKAAngleReq (14-bit big-endian over bytes 3-4, factor 0.04, offset -327.68 deg).
+    // raw*0.04 - 327.68 deg, carried here as angle_deg * 100 => raw*4 - 32768.
+    unsigned int angle_raw = ((GET_BYTES(msg, 3, 1) & 0x3FU) << 8) | GET_BYTES(msg, 4, 1);
+    int desired_angle = ((int)angle_raw * 4) - 32768;
+
+    // Gate on angle command, not LKASteerDirection: EUCD needs ~8-frame NONE pause on
+    // direction change while OP still emits a tracking angle — gating direction would stall lat.
     bool lka_active = (GET_BYTES(msg, 5, 1) & 0x03U) != 0U;
-    // EUCD requires LKASteerDirection=NONE for eight frames when changing
-    // direction, while LKAAngleReq continues tracking the target. Keep the
-    // angle-rate state active through that handoff; treating NONE as fully
-    // inactive rejects the retained target and causes a rejection cascade
-    // when the direction becomes active again.
-    bool angle_tracking_active = controls_allowed || lka_active;
-    violation |= steer_angle_cmd_checks(desired_angle, angle_tracking_active, VOLVO_STEERING_LIMITS);
+    bool steer_control_enabled = controls_allowed || lka_active;
+
+    if (steer_angle_cmd_checks(desired_angle, steer_control_enabled, VOLVO_STEERING_LIMITS)) {
+      violation = true;
+    }
   }
 
-  if ((msg->addr == VOLVO_EUCD_FSM0) || (msg->addr == VOLVO_EUCD_FSM1)) {
-    violation |= !controls_allowed;
-  }
-
-  if (msg->addr == VOLVO_EUCD_FSM3) {
+  // Longitudinal control: gate on controls_allowed + range check.
+  // check_relay=false lets stock FSM3 flow cam->main; OP overlays only when long-active.
+  if (addr == VOLVO_EUCD_FSM3) {
     int raw_accel = (int)GET_BYTES(msg, 1, 1) - 126;
-    violation |= !controls_allowed || longitudinal_accel_checks(raw_accel, VOLVO_LONG_LIMITS);
+    // When controls are not allowed, only the inactive (neutral) accel is permitted so OP
+    // can relay stock FSM3 at 50Hz without faulting the ECU. When controls are allowed,
+    // enforce the standard accel range.
+    bool accel_violation = controls_allowed ? longitudinal_accel_checks(raw_accel, VOLVO_LONG_LIMITS)
+                                             : (raw_accel != VOLVO_LONG_LIMITS.inactive_accel);
+    if (accel_violation) {
+      violation = true;
+    }
   }
 
-  return !violation;
+  if (violation) {
+    tx = false;
+  }
+
+  return tx;
 }
 
 static bool volvo_fwd_hook(int bus_num, int addr) {
-  if ((bus_num == (int)VOLVO_CAM_BUS) && controls_allowed && !gas_pressed) {
-    return (addr == VOLVO_EUCD_FSM0) || (addr == VOLVO_EUCD_FSM1) || (addr == VOLVO_EUCD_FSM3);
+  bool block_msg = false;
+  // camera FSM1/FSM3 blocked while OP controls (OP sends them)
+  if (((unsigned int)bus_num == VOLVO_CAM_BUS) && controls_allowed && !gas_pressed) {
+    if ((addr == VOLVO_EUCD_FSM1) || (addr == VOLVO_EUCD_FSM3)) {
+      block_msg = true;
+    }
   }
-  return false;
+  // FSM0 never forwarded main->cam (check_relay on CAM_BUS would trip on the camera's own FSM0)
+  if (((unsigned int)bus_num == VOLVO_MAIN_BUS) && (addr == VOLVO_EUCD_FSM0)) {
+    block_msg = true;
+  }
+  return block_msg;
 }
 
 static safety_config volvo_init(uint16_t param) {
   (void)param;
 
-  static const CanMsg VOLVO_TX_MSGS[] = {
-    {VOLVO_EUCD_FSM0,       VOLVO_MAIN_BUS, 8, .check_relay = false},
-    {VOLVO_EUCD_CC_BUTTONS, VOLVO_MAIN_BUS, 8, .check_relay = false},
-    {VOLVO_EUCD_PSCM1,      VOLVO_CAM_BUS,  8, .check_relay = true},
-    {VOLVO_EUCD_FSM1,       VOLVO_MAIN_BUS, 8, .check_relay = false},
-    {VOLVO_EUCD_FSM2,       VOLVO_MAIN_BUS, 8, .check_relay = true},
-    {VOLVO_EUCD_FSM3,       VOLVO_MAIN_BUS, 8, .check_relay = false},
+  static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
+    {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS, 8, .check_relay = false},
+    {VOLVO_EUCD_PSCM1,     VOLVO_CAM_BUS,  8, .check_relay = true},   // OP replaces stock steering servo state
+    // car -> camera, relayed by OP
+    {VOLVO_EUCD_BRAKE_LEVEL, VOLVO_CAM_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_BRAKE_ACK,   VOLVO_CAM_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_WHEELSPEED1, VOLVO_CAM_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_BRAKE_REQ_ACK, VOLVO_CAM_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_FSM2,      VOLVO_MAIN_BUS, 8, .check_relay = true},   // OP replaces stock LKA command
+    // FSM1/FSM3: camera's pass through while OP does not control (relay delay faults the ECM)
+    {VOLVO_EUCD_FSM1,      VOLVO_MAIN_BUS, 8, .check_relay = false},
+    {VOLVO_EUCD_FSM3,      VOLVO_MAIN_BUS, 8, .check_relay = false},
+    // camera -> car, relayed by OP
+    {VOLVO_EUCD_FSM4,      VOLVO_MAIN_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_FSM0,      VOLVO_MAIN_BUS, 8, .check_relay = true},
   };
 
-  static RxCheck volvo_rx_checks[] = {
-    {.msg = {{VOLVO_EUCD_ACC_PEDAL, VOLVO_MAIN_BUS, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-    {.msg = {{VOLVO_EUCD_FSM0, VOLVO_CAM_BUS, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-    {.msg = {{VOLVO_EUCD_VEHICLE_SPEED, VOLVO_MAIN_BUS, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-    {.msg = {{VOLVO_EUCD_BRAKE_INFO, VOLVO_MAIN_BUS, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-    {.msg = {{VOLVO_EUCD_PSCM1, VOLVO_MAIN_BUS, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+  // TODO: add counters
+  static RxCheck volvo_eucd_rx_checks[] = {
+    {.msg = {{VOLVO_EUCD_AccPedal,      VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 100U}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_EUCD_FSM0,          VOLVO_CAM_BUS,  8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 100U}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_EUCD_EngineData,    VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 67U}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_EUCD_VehicleSpeed1, VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_EUCD_Brake_Info,    VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_EUCD_PSCM1,         VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},  // steering angle meas
   };
 
-  return BUILD_SAFETY_CFG(volvo_rx_checks, VOLVO_TX_MSGS);
+  return BUILD_SAFETY_CFG(volvo_eucd_rx_checks, VOLVO_EUCD_TX_MSGS);
 }
 
 const safety_hooks volvo_hooks = {

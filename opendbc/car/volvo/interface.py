@@ -11,10 +11,8 @@ from opendbc.car.volvo.values import DBC
 class CarInterface(CarInterfaceBase):
   CarState = CarState
   CarController = CarController
-  # Without this binding, CarInterfaceBase's default RadarInterfaceBase stub
-  # is used — it returns an empty RadarData every 5 frames regardless of what
-  # the radar sees. Drive 0000003f had the DBC and CarParams wired up
-  # correctly but liveTracks.points stayed 0 because of this missing line.
+  # Without this binding, CarInterfaceBase uses the default RadarInterfaceBase stub
+  # which returns empty RadarData — liveTracks.points would stay at 0.
   RadarInterface = RadarInterface
 
   @staticmethod
@@ -25,9 +23,8 @@ class CarInterface(CarInterfaceBase):
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.volvo)]
     # ret.dashcamOnly = True
 
-    # Read the Delphi ESR 2.5 directly off the aux bus. When Bus.radar is in the
-    # DBC dict, RadarInterface decodes 64 tracks at 20Hz; the planner uses those
-    # instead of relying on stock FSM's fused single-lead ACC_Distance.
+    # When Bus.radar is in DBC, RadarInterface decodes the Delphi ESR 2.5 directly
+    # (64 tracks at 20Hz) instead of relying on stock FSM's single-lead ACC_Distance.
     ret.radarUnavailable = Bus.radar not in DBC[candidate]
 
     ret.steerControlType = structs.CarParams.SteerControlType.angle
@@ -35,9 +32,14 @@ class CarInterface(CarInterfaceBase):
     ret.steerActuatorDelay = 0.2
     ret.steerLimitTimer = 0.8
 
-    # Longitudinal
-    ret.openpilotLongitudinalControl = True
-    ret.longitudinalActuatorDelay = 0.35
-    ret.stopAccel = 0
+    # OP long: stock ACC still engages and owns the set speed (pcmCruise); OP replaces FSM3 accel/mode/traction
+    ret.alphaLongitudinalAvailable = True
+    ret.openpilotLongitudinalControl = alpha_long
+    if ret.openpilotLongitudinalControl:
+      ret.longitudinalActuatorDelay = 0.5  # FSM3 accel request -> aEgo, ~0.6s in stock routes 807/808
+      # the car delivers ~70% of the requested decel (route 821: -1.1 asked, -0.8 measured) and stopped 1.7 m behind
+      # the lead; integral on the accel error closes that gap (no proportional term, the ECM has its own loop)
+      ret.longitudinalTuning.kiBP = [0.]
+      ret.longitudinalTuning.kiV = [0.5]
 
     return ret

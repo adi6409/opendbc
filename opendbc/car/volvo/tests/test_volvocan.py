@@ -27,7 +27,7 @@ def test_resume_ack_is_stock_shaped_instead_of_zero_filled():
   packer = CANPacker("volvo_v60_2015_pt")
   stock = stock_fsm3_values()
   _, normal_dat, _ = volvocan.create_longitudinal(packer, stock, accel=2.0, acc_check=0)
-  _, ack_dat, _ = volvocan.create_acc_state_msg(packer, stock, accel=2.0)
+  _, ack_dat, _ = volvocan.create_longitudinal(packer, stock, accel=2.0, acc_check=1)
 
   assert ack_dat[0] == normal_dat[0] | 0x04
   assert ack_dat[1:] == normal_dat[1:]

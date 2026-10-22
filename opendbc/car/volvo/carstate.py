@@ -6,6 +6,11 @@ from opendbc.car.volvo.values import CarControllerParams, DBC, CANBUS
 from opendbc.car import Bus, structs
 
 
+def all_frames(cp, name):
+  sigs = cp.vl_all[name]
+  return [dict(zip(sigs.keys(), vals, strict=True)) for vals in zip(*sigs.values(), strict=True)]
+
+
 class CarState(CarStateBase):
   def __init__(self, CP):
     super().__init__(CP)
@@ -53,14 +58,15 @@ class CarState(CarStateBase):
     # matches what the user dialed on the car cluster.
     ret.cruiseState.speedCluster = ret.cruiseState.speed * VOLVO_CLUSTER_SCALE
     ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
-    ret.cruiseState.enabled = bool(cam_cp.vl["FSM0"]["ACC_Enabled"])
+    self.ecm_acc_engaged = pt_cp.vl["EngineData"]["ACC_State_ECM"] == 3
+    ret.cruiseState.enabled = self.ecm_acc_engaged
     # ACC_Standstill bit = 1 when Volvo's ACC is holding the car at 0 km/h
     # with brake applied (standstill hold). OP's SNG block reads this to know
     # when to blast Resume button so stock ACC properly releases and follows
     # the lead resuming. Without this, stock ACC sees OP commanding accel
     # from standstill without a Resume press and hard-cancels (observed in
     # drive 38).
-    ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"])
+    ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
     ret.cruiseState.nonAdaptive = False
     ret.accFaulted = False
     self.acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]
@@ -113,6 +119,12 @@ class CarState(CarStateBase):
     self.stock_FSM0 = copy.copy(cam_cp.vl["FSM0"])
     self.stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
     self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
+    self.stock_FSM0_frames = all_frames(cam_cp, "FSM0")
+    self.stock_FSM4_frames = all_frames(cam_cp, "FSM4")
+    self.stock_133_frames = all_frames(pt_cp, "NEW_MSG_133")
+    self.stock_323_frames = all_frames(pt_cp, "NEW_MSG_323")
+    self.stock_220_frames = all_frames(pt_cp, "wheelspeed1")
+    self.stock_299_frames = all_frames(pt_cp, "NEW_MSG_299")
     self.ACC_Check = cam_cp.vl["FSM3"]["ACC_Check"]
 
     self.frame += 1
@@ -122,6 +134,11 @@ class CarState(CarStateBase):
   def get_can_parsers(CP):
     pt_messages = [
       ("VehicleSpeed1", 50),
+      ("EngineData", 66),
+      ("wheelspeed1", 50),
+      ("NEW_MSG_299", 50),
+      ("NEW_MSG_133", 50),
+      ("NEW_MSG_323", 25),
       ("AccPedal", 100),
       ("Brake_Info", 50),
       ("PSCM1", 50),
@@ -136,6 +153,7 @@ class CarState(CarStateBase):
       ("FSM0", 100),
       ("FSM1", 50),
       ("FSM3", 50),
+      ("FSM4", 33),
     ]
 
     return {
